@@ -1,25 +1,23 @@
-from agent import TradingAgent
-import fin_utils
-import clf_utils
-import config
-import pickle as pkl
-import torch
 import os
-import time
-import numpy as np
-import matplotlib.pyplot as plt
+import pickle as pkl
+
+import torch
+
+from agent import TradingAgent
+from src.configs.configs import MODEL_PATH, RESULT_PATH, INITIAL_WEALTH, TRAIN_RL_PATH
+from src.q_agent import utils
+from src.regime_detection.rf_classifier import load_trend_detector
 
 
 def train_epoch(agent, data, clf, epoch, length):
     """
     Train the agent for one epoch and return metrics.
     """
-    wealth = config.INITIAL_WEALTH
-    current_wealth = wealth
-    portfolio, tickers = fin_utils.initialize_portfolio(data)
+    wealth = INITIAL_WEALTH
+    portfolio, tickers = utils.initialize_portfolio(data)
     ticker = tickers[0]  # Assume single stock for now
 
-    state = fin_utils.get_current_state(data, wealth, portfolio, clf, 37)
+    state = utils.get_current_state(data, wealth, portfolio, clf, 0)
     total_profit = 0
     reward = 0
     penalty = 6
@@ -67,7 +65,7 @@ def train_epoch(agent, data, clf, epoch, length):
         # Update wealth and state
         current_wealth = wealth + portfolio[ticker] * data.iloc[t].close
         done = t == (length - 1)
-        next_state = fin_utils.get_current_state(data, current_wealth, portfolio, clf, t + 1)
+        next_state = utils.get_current_state(data, current_wealth, portfolio, clf, t + 1)
         agent.remember(state, action, reward, next_state, done)
         state = next_state
 
@@ -82,11 +80,11 @@ def main():
     num_epochs = 30
 
     # Load or create models
-    rf_clf = clf_utils.preprocess_and_create_clf()
+    rf_clf = load_trend_detector()
     agent = TradingAgent(input_dim=8, action_dim=3, hidden_layers=[64, 32], train=True)
 
     # Load and prepare data
-    data = fin_utils.get_single_stock(config.TRAIN_RL_PATH)
+    data = utils.get_stock(TRAIN_RL_PATH)
     length = len(data) - 1
 
     # Training loop
@@ -120,6 +118,6 @@ def main():
 
 
 if __name__ == '__main__':
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("results", exist_ok=True)
+    os.makedirs(MODEL_PATH, exist_ok=True)
+    os.makedirs(RESULT_PATH, exist_ok=True)
     main()

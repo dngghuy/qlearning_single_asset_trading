@@ -59,7 +59,7 @@ class TradingAgent:
         self.memory = deque(maxlen=100000)
         self.inventory = []
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "mps")
 
         # Initialize or load model
         if model_path and not train:
