@@ -1,123 +1,99 @@
-import os
-import pickle as pkl
+import sys
+import time
 
 import torch
 
-from agent import TradingAgent
-from src.configs.configs import MODEL_PATH, RESULT_PATH, INITIAL_WEALTH, TRAIN_RL_PATH
-from src.q_agent import utils
+import src.q_agent.utils as us  # Assuming this module exists
+from agent import TradingAgent, QNetwork
+from src.configs.configs import TICKER_COL, CLOSE_COL, TRAIN_RL_PATH, RL_MODEL_PATH
 from src.regime_detection.rf_classifier import load_trend_detector
 
-
-def train_epoch(agent, data, clf, epoch, length):
-    """
-    Train the agent for one epoch and return metrics.
-    """
-    wealth = INITIAL_WEALTH
-    portfolio, tickers = utils.initialize_portfolio(data)
-    ticker = tickers[0]  # Assume single stock for now
-
-    state = utils.get_current_state(data, wealth, portfolio, clf, 0)
-    total_profit = 0
-    reward = 0
-    penalty = 6
-    penalty_same_action = 10
-    action_past = None
-
-    agent.inventory = []
-
-    for t in range(37, length):
-        # Select action
-        action = agent.act(state)
-        if action_past is None:
-            action = 1
-
-        # Buy Action
-        if action == 1 and action != action_past:
-            if wealth >= data.iloc[t].close:
-                num_shares = int(wealth / data.iloc[t].close)
-                portfolio[ticker] += num_shares
-                wealth -= num_shares * data.iloc[t].close
-                agent.inventory.append(data.iloc[t])
-                reward -= penalty
-                print(f"BUY {ticker} at {data.iloc[t].close}, wealth: {wealth}")
-                action_past = action
-
-        # Sell Action
-        elif action == 2 and action != action_past:
-            if len(agent.inventory) > 0:
-                past_data = agent.inventory.pop(0)
-                profit = (data.iloc[t].close - past_data.close) * portfolio[ticker]
-                reward += profit - penalty
-                total_profit += profit
-                wealth += data.iloc[t].close * portfolio[ticker]
-                portfolio[ticker] = 0
-                print(f"SELL {ticker} at {data.iloc[t].close}, profit: {profit}, wealth: {wealth}")
-                action_past = action
-
-        # Hold Action
-        elif action == 0 and action == action_past:
-            reward -= penalty_same_action * 0.9
-        else:
-            reward -= penalty_same_action
-            action_past = action
-
-        # Update wealth and state
-        current_wealth = wealth + portfolio[ticker] * data.iloc[t].close
-        done = t == (length - 1)
-        next_state = utils.get_current_state(data, current_wealth, portfolio, clf, t + 1)
-        agent.remember(state, action, reward, next_state, done)
-        state = next_state
-
-        # Finalize at end of epoch
-        if done:
-            final_wealth = portfolio[ticker] * data.iloc[t].close + wealth
-            print(f"Epoch {epoch} completed. Final wealth: {final_wealth}, Profit: {total_profit}")
-            return total_profit, reward
-
-
-def main():
-    num_epochs = 30
-
-    # Load or create models
-    rf_clf = load_trend_detector()
-    agent = TradingAgent(input_dim=8, action_dim=3, hidden_layers=[64, 32], train=True)
-
-    # Load and prepare data
-    data = utils.get_stock(TRAIN_RL_PATH)
-    length = len(data) - 1
-
-    # Training loop
-    total_profit_per_epoch = []
-    total_reward_per_epoch = []
-
-    for epoch in range(1, num_epochs + 1):
-        print(f"Starting Epoch {epoch}")
-        profit, reward = train_epoch(agent, data, rf_clf, epoch, length)
-        total_profit_per_epoch.append(profit)
-        total_reward_per_epoch.append(reward)
-
-        # Train agent on replay buffer
-        agent.replay(batch_size=32)
-
-        # Save progress
-        if epoch % 3 == 0:
-            torch.save(agent.model.state_dict(), f"models/model_epoch_{epoch}.pt")
-            with open(f"results/profit_epoch_{epoch}.pkl", 'wb') as f:
-                pkl.dump(total_profit_per_epoch, f)
-            with open(f"results/reward_epoch_{epoch}.pkl", 'wb') as f:
-                pkl.dump(total_reward_per_epoch, f)
-
-    # Save final metrics
-    with open('results/final_profit.pkl', 'wb') as f:
-        pkl.dump(total_profit_per_epoch, f)
-    with open('results/final_reward.pkl', 'wb') as f:
-        pkl.dump(total_reward_per_epoch, f)
-
-    print("Training completed.")
-
-
 if __name__ == '__main__':
-    os.makedirs(MODEL_PATH, exist_ok=True)
-    os.makedirs(RESULT_PATH, exist_ok=True)
-    main()
+
+    # filename, epochs = sys.argv[1], int(sys.argv[2])
+    # path = '/home/huy/Desktop/Thesis-code/trend-predict/data/' + filename  # Update path if needed
+    model = QNetwork(input_dim=18, action_dim=3)
+    trading_agent = TradingAgent(model=model, train=True)
+
+    data = us.get_stock(TRAIN_RL_PATH)
+    length = len(data) - 1
+    batch_size = 32
+    rf_clf = load_trend_detector()
+    epochs = 10
+
+    for e in range(epochs + 1):
+        wealth = 5000.0
+        portfolio, tickers = us.initialize_portfolio(data, wealth)
+        state = us.get_current_state(data, wealth, portfolio, 0)
+        print(f'Initial state: we have {wealth} in VND and our port is {portfolio}')
+
+        total_profit = 0
+        trading_agent.inventory = []
+        total_val = [wealth]
+
+        for t in range(length):
+            # if t % 100 == 0:
+            #     print('------------------------------------------------------')
+            #     print(f'At time step {t} in epoch {e}:\n', reward)
+            #     # print(f'Current wealth {wealth + portfolio[tickers] * close}')
+            #     print('------------------------------------------------------')
+            #     print('\n')
+            #     time.sleep(0.9)
+
+            action = trading_agent.make_action(state)
+            reward = 0
+            temp = data.iloc[t]
+            ticker = tickers[0]
+            if action == 1:
+                if portfolio['cash'][t] >= data.iloc[t][CLOSE_COL]:
+                    trading_agent.inventory.append(temp)
+                    num_shares = int(portfolio['cash'][t] / temp[CLOSE_COL])
+                    portfolio['cash'].append(portfolio['cash'][t] - num_shares * temp[CLOSE_COL])
+                    portfolio[ticker].append(portfolio.get(ticker)[t] + num_shares)
+                    # print(f'All-in {temp[TICKER_COL]} at {temp[CLOSE_COL]}:\n')
+                    time.sleep(0.9)
+                else:
+                    # print('wrong buy move')
+                    reward -= portfolio['cash'][t] * 0.5
+                    portfolio['cash'].append(portfolio['cash'][t])
+                    portfolio[ticker].append(portfolio[ticker][t])
+            elif action == 2:
+                if len(trading_agent.inventory) > 0:
+                    data_past = trading_agent.inventory.pop(0)
+                    reward = temp[CLOSE_COL] - data_past[CLOSE_COL]
+                    profit = reward * portfolio[ticker][t]
+                    current_cash = portfolio['cash'][t] + temp[CLOSE_COL] * portfolio[ticker][t]
+                    portfolio['cash'].append(current_cash)
+                    portfolio[ticker].append(0)
+
+                    # print(f'All-out {temp[TICKER_COL]} at {temp[CLOSE_COL]}:\n')
+                    time.sleep(0.9)
+                else:
+                    # print('wrong sell move')
+                    reward -= 0.5 * temp[CLOSE_COL] * portfolio[ticker][t]
+                    portfolio['cash'].append(portfolio['cash'][t])
+                    portfolio[ticker].append(portfolio[ticker][t])
+            else:
+                portfolio['cash'].append(portfolio['cash'][t])
+                portfolio[ticker].append(portfolio[ticker][t])
+
+            next_step = t + 1
+            data_state = data[[i for i in data.columns if i != TICKER_COL]].iloc[[t + 1]]
+            next_state = us.get_current_state_single_stock(data_state, ticker, portfolio, rf_clf, t=t + 1)
+
+            done = t == (length - 1)
+            trading_agent.memory.append((state, action, reward, next_state, done))
+            state = next_state
+
+            if done:
+                final_wealth = portfolio[tickers] * data.iloc[t].CLOSE + wealth
+                print(f'Final wealth: {final_wealth}')
+                print('reward: ', reward)
+
+            if len(trading_agent.memory) > batch_size:
+                print('Learning..., current reward: ', reward)
+                trading_agent.learn(batch_size)
+        if e % 2 == 0:
+            torch.save(trading_agent.model.state_dict(), f"{RL_MODEL_PATH}")  # Save PyTorch model
+
+    print(trading_agent.history)  # Print the loss history

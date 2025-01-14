@@ -11,6 +11,7 @@ RESULT_PATH = os.path.join(ROOT_FILE, 'results')
 TRAIN_RF_PATH = os.path.join(DATA_PATH, 'GOOGL_RF.csv')
 TRAIN_RL_PATH = os.path.join(DATA_PATH, 'VNM.csv')
 RF_MODEL_PATH = os.path.join(MODEL_PATH, 'trendRF.pkl')
+RL_MODEL_PATH = os.path.join(MODEL_PATH, 'trendRL.pkl')
 
 # General Parameters
 TRAIN_TEST_RATIO = 0.8
@@ -38,6 +39,7 @@ SMA_COL = 'sma'
 CLOSE_COL = 'close'
 HIGH_COL = 'high'
 LOW_COL = 'low'
+TICKER_COL = 'ticker'
 MACD_COL = 'macd'
 MACD_SIGNAL_COL = 'macd_signal'
 MACD_HIST_COL = 'macd_hist'

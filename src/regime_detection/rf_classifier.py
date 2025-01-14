@@ -15,7 +15,6 @@ def train_trend_detector(data_path):
     train_label = np.array(train_label).ravel()
     test_label = np.array(test_label).ravel()
 
-
     clf = RandomForestClassifier()
     gsts = GridSearchTS(clf, RF_GRID_PARAMS, N_SPLIT)
     gsts.fit(train, train_label)
@@ -37,5 +36,5 @@ def load_trend_detector():
     return clf
 
 
-# if __name__ == '__main__':
-#     train_trend_detector(data_path=TRAIN_RF_PATH)
+if __name__ == '__main__':
+    train_trend_detector(data_path=TRAIN_RF_PATH)

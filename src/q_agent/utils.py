@@ -2,6 +2,8 @@
 import pandas as pd
 import numpy as np
 
+from src.configs.configs import CLOSE_COL, TICKER_COL, VOLUME_COL
+
 
 def telling_trend(difference):
     """
@@ -23,7 +25,7 @@ def making_trend(data, side_window):
         the moving average
     """
     if type(data) == pd.DataFrame:
-        difference = [data.CLOSE[i+side_window] - data.CLOSE[i] for i in range(len(data)-side_window)]
+        difference = [data[CLOSE_COL][i+side_window] - data[CLOSE_COL][i] for i in range(len(data)-side_window)]
         trend = [telling_trend(i) for i in difference]
     else:
         difference = [data[i+side_window] - data[i] for i in range(len(data)-side_window)]
@@ -39,22 +41,34 @@ def get_stock(path):
     return data
 
 
-def get_current_state(data, wealth, portfolio, clf, t):
-    W_t = wealth + portfolio[data.TICKER[t]] * data.CLOSE[t]
+def get_current_state(data, wealth, tickers, portfolio, clf, t):
+    wealth_t = wealth + [portfolio[ticker] * data.loc[data[TICKER_COL] == ticker][CLOSE_COL][t] for ticker in tickers]
     data_t = data.iloc[t, :]
 
-    S_t = data_t.CLOSE
-    V_t = data_t.VOLUME
+    state_t = data_t[CLOSE_COL]
+    volume_t = data_t[VOLUME_COL]
     print(data_t)
     pred_t = clf.predict(data_t)
 
-    return np.array([V_t, S_t, W_t, pred_t]).reshape(1, -1)
+    return np.array([volume_t, state_t, wealth_t, pred_t]).reshape(1, -1)
 
 
-def initialize_portfolio(data):
-    all_stocks = np.unique(np.array(data.TICKER))
+def initialize_portfolio(data, wealth):
+    all_stocks = np.unique(np.array(data[TICKER_COL]))
     port = {}
     for stock in all_stocks:
-        port[stock] = 0
+        port[stock] = [0]
+    port['cash'] = [wealth]
 
-    return port, all_stocks[0]
+    return port, all_stocks
+
+
+def get_current_state_single_stock(data, ticker, portfolio, clf, t):
+    """
+    data should be cleaned
+    """
+    # getting other cols
+
+    pred_t = clf.predict(data)[0]
+
+    return np.hstack([data.values.reshape(-1), np.array([pred_t])]).reshape(1, -1)

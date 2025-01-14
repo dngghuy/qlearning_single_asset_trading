@@ -15,21 +15,153 @@ def read_data(filepath, has_date_col: Union[bool, str] = True):
     return data
 
 
-def exp_smooth(dataset, alpha=0.2):
-    """
-    Exponential Smoothing
-    :param dataset:
-    :param alpha:
-    :return:
-    """
-    return dataset.iloc[::-1].ewm(alpha=alpha).mean().iloc[::-1]
+class RateOfChange:
+    def __call__(self, dataset, columns, period=1, default_suffix='roc'):
+        for col in columns:
+            # Calculate relative change
+            dataset[f'{col}_{default_suffix}'] = dataset[col].pct_change(periods=period).fillna(0)
+        return dataset
+
+
+class WrapSMA:
+    def __init__(self, timeperiod):
+        self.timeperiod = timeperiod
+
+    def __call__(self, dataset, use_roc: bool = False):
+        if use_roc:
+            dataset[f'{SMA_COL}_{self.timeperiod}'] = SMA(dataset[f'{CLOSE_COL}_roc'], timeperiod=self.timeperiod)
+        else:
+            dataset[f'{SMA_COL}_{self.timeperiod}'] = SMA(dataset[CLOSE_COL], timeperiod=self.timeperiod)
+
+        return dataset
+
+
+class WrapMACD:
+    def __init__(self, fastperiod, slowperiod, signalperiod):
+        self.fastperiod = fastperiod
+        self.slowperiod = slowperiod
+        self.signalperiod = signalperiod
+
+    def __call__(self, dataset, use_roc: bool = False):
+        if use_roc:
+            macd, macd_signal, macd_hist = MACD(
+                dataset[f'{CLOSE_COL}_roc'],
+                fastperiod=self.fastperiod,
+                slowperiod=self.slowperiod,
+                signalperiod=self.signalperiod
+            )
+        else:
+            macd, macd_signal, macd_hist = MACD(
+                dataset[CLOSE_COL],
+                fastperiod=self.fastperiod,
+                slowperiod=self.slowperiod,
+                signalperiod=self.signalperiod
+            )
+
+        dataset[MACD_COL] = macd
+        dataset[MACD_SIGNAL_COL] = macd_signal
+        dataset[MACD_HIST_COL] = macd_hist
+
+        return dataset
+
+
+class WrapRSI:
+    def __init__(self, timeperiod):
+        self.timeperiod = timeperiod
+
+    def __call__(self, dataset, use_roc: bool = False):
+        if use_roc:
+            dataset[RSI_COL] = RSI(dataset[f'{CLOSE_COL}_roc'], timeperiod=self.timeperiod)
+        else:
+            dataset[RSI_COL] = RSI(dataset[CLOSE_COL], timeperiod=self.timeperiod)
+
+        return dataset
+
+
+class WrapMOM:
+    def __init__(self, timeperiod):
+        self.timeperiod = timeperiod
+
+    def __call__(self, dataset, use_roc: bool = False):
+        if use_roc:
+            dataset[MOM_COL] = MOM(dataset[f'{CLOSE_COL}_roc'], timeperiod=self.timeperiod)
+        else:
+            dataset[MOM_COL] = MOM(dataset[CLOSE_COL], timeperiod=self.timeperiod)
+
+        return dataset
+
+
+class WrapROC:
+    def __init__(self, timeperiod):
+        self.timeperiod = timeperiod
+
+    def __call__(self, dataset):
+        dataset[f"{ROC_COL}_{self.timeperiod}"] = ROC(dataset[CLOSE_COL], timeperiod=self.timeperiod)
+
+        return dataset
+
+
+class WrapWILLR:
+    def __init__(self, timeperiod):
+        self.timeperiod = timeperiod
+
+    def __call__(self, dataset):
+        dataset[WILLR_COL] = WILLR(dataset[HIGH_COL], dataset[LOW_COL], dataset[CLOSE_COL], timeperiod=self.timeperiod)
+
+        return dataset
+
+
+class WrapMFI:
+    def __init__(self, timeperiod):
+        self.timeperiod = timeperiod
+
+    def __call__(self, dataset):
+        dataset[MFI_COL] = MFI(
+            dataset[HIGH_COL],
+            dataset[LOW_COL],
+            dataset[CLOSE_COL],
+            dataset[VOLUME_COL],
+            timeperiod=self.timeperiod
+        )
+
+        return dataset
+
+
+class WrapDELTA:
+    def __init__(self, timeperiod):
+        self.timeperiod = timeperiod
+
+    def __call__(self, dataset):
+        dataset[DELTA_VOLUME_COL] = dataset[VOLUME_COL].diff(self.timeperiod)
+
+        return dataset
+
+
+class ExpSmooth:
+    def __init__(self, alpha):
+        self.alpha = alpha
+
+    def __call__(self, dataset):
+        return dataset.iloc[::-1].ewm(alpha=self.alpha).mean().iloc[::-1]
+
+
+class DataFeatureEngineer:
+    def __init__(self, transformation_list):
+        self.transformation_list = transformation_list
+
+    def process(self, dataset):
+        for transformation in self.transformation_list:
+            dataset = transformation(dataset)
+
+        return dataset
 
 
 def make_label(stock, window_length=WINDOW_LENGTH):
     sma_col = f'{SMA_COL}{window_length}'
     stock[sma_col] = stock[CLOSE_COL].rolling(window=window_length).mean()
     diff = stock[sma_col].diff(window_length).dropna()
-    label = [1 if i > 0 else 0 for i in diff]
+    roc = (diff / stock[sma_col].diff(window_length)) * 100
+    label = [1 if i >= 5 else 0 for i in diff]
     stock = stock.iloc[window_length:].drop([sma_col], axis=1)
     return stock, label
 
@@ -45,56 +177,64 @@ def make_onehot(label):
     return one_hot
 
 
-def simple_feature_engineer(stock):
-    stock[f'{SMA_COL}_10'] = SMA(stock[CLOSE_COL], timeperiod=10)
-    stock[f'{SMA_COL}_30'] = SMA(stock[CLOSE_COL], timeperiod=30)
-    # MACD
-    macd, macd_signal, macd_hist = MACD(
-        stock[CLOSE_COL],
-        fastperiod=12,
-        slowperiod=26,
-        signalperiod=9
-    )
-    stock[MACD_COL] = macd
-    stock[MACD_SIGNAL_COL] = macd_signal
-    stock[MACD_HIST_COL] = macd_hist
-    stock[RSI_COL] = RSI(stock[CLOSE_COL], timeperiod=10)
-    stock[MOM_COL] = MOM(stock[CLOSE_COL], timeperiod=12)
-    stock[ROC_COL] = ROC(stock[CLOSE_COL], timeperiod=10)
-    stock[WILLR_COL] = WILLR(stock[HIGH_COL], stock[LOW_COL], stock[CLOSE_COL], timeperiod=14)
-
-    if VOLUME_COL in stock.columns:
-        stock[DELTA_VOLUME_COL] = stock[VOLUME_COL].diff(10)
-        stock[MFI_COL] = MFI(
-            stock[HIGH_COL],
-            stock[LOW_COL],
-            stock[CLOSE_COL],
-            stock[VOLUME_COL],
-            timeperiod=12
-        )
-
-    return stock.dropna().reset_index(drop=True)
-
-
 def preprocess(dataset):
-    dataset.columns = [dat.lower() for dat in dataset.columns]
+    """
 
-    #Split to train and test sets
+    Args:
+        dataset:
+
+    Returns:
+
+    """
+
+    dataset.columns = [dat.lower() for dat in dataset.columns]
+    feature_list = [
+        'macd',
+        'macd_signal',
+        'macd_hist',
+        'rsi',
+        'mom',
+        'roc_10',
+        'willr',
+        'mfi',
+        'delta_volume'
+    ]
+    # Split to train and test sets
     index = int(len(dataset) * RATIO)
     train_dataset = dataset.iloc[0:index, :]
     test_dataset = dataset.iloc[index:, :]
 
-    #Make label
+    # Make label
     train_dataset, train_label = make_label(train_dataset, window_length=WINDOW_LENGTH)
     test_dataset, test_label = make_label(test_dataset, window_length=WINDOW_LENGTH)
 
-    #Exponential smoothing
-    train_dataset = exp_smooth(train_dataset)
-    test_dataset = exp_smooth(test_dataset)
+    exp_smooth = ExpSmooth(alpha=0.2)
 
-    #Create new feature
-    train_dataset = simple_feature_engineer(train_dataset)
-    test_dataset = simple_feature_engineer(test_dataset)
+    transformation_list = [
+        WrapSMA(timeperiod=10),
+        WrapSMA(timeperiod=30),
+        WrapMACD(fastperiod=12, slowperiod=26, signalperiod=9),
+        WrapRSI(timeperiod=10),
+        WrapMOM(timeperiod=12),
+        WrapROC(timeperiod=10),
+        WrapWILLR(timeperiod=14),
+        WrapMFI(timeperiod=14),
+        WrapDELTA(timeperiod=10),
+    ]
+
+    feature_engineer = DataFeatureEngineer(transformation_list)
+
+    # Exponential smoothing
+    # train_dataset = exp_smooth(train_dataset)
+    # test_dataset = exp_smooth(test_dataset)
+
+    # Create new feature
+    train_dataset = feature_engineer.process(train_dataset)
+    train_dataset = train_dataset.dropna().reset_index(drop=True)
+    train_dataset = train_dataset[feature_list]
+    test_dataset = feature_engineer.process(test_dataset)
+    test_dataset = test_dataset.dropna().reset_index(drop=True)
+    test_dataset = test_dataset[feature_list]
 
     # Make features matrix and label matrix to be equal
     train_len_diff = len(train_label) - len(train_dataset)
