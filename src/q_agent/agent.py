@@ -21,15 +21,12 @@ class QNetwork(nn.Module):
         self.model = nn.Sequential(
             nn.Linear(input_dim, 64),
             nn.ReLU(),
-            # nn.BatchNorm1d(64),
             nn.Linear(64, 128),
             nn.ReLU(),
-            # nn.BatchNorm1d(128),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
-            # nn.BatchNorm1d(64),
             nn.Linear(64, action_dim)
         )
 
@@ -68,6 +65,10 @@ class TradingAgent:
         self.action_history.append(action)
         return action
 
+    def update_epsilon(self):
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+
     def learn(self, batch_size):
         """
         Updates the model using experience replay and a PyTorch training loop.
@@ -98,55 +99,3 @@ class TradingAgent:
 
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
-    # def act(self, state):
-    #     """
-    #     Select an action based on the current state and epsilon-greedy strategy.
-    #     """
-    #     if self.train and random.random() < self.epsilon:
-    #         return random.randint(0, self.action_dim - 1)
-    #
-    #     state = torch.FloatTensor(state).to(self.device)
-    #     with torch.no_grad():
-    #         q_values = self.model(state)
-    #     return torch.argmax(q_values).item()
-    #
-    # def remember(self, state, action, reward, next_state, done):
-    #     """
-    #     Store experience in memory.
-    #     """
-    #     self.memory.append((state, action, reward, next_state, done))
-
-    # def replay(self, batch_size):
-    #     """
-    #     Train the model using experiences sampled from memory.
-    #     """
-    #     if len(self.memory) < batch_size:
-    #         return
-    #
-    #     mini_batch = random.sample(self.memory, batch_size)
-    #
-    #     for state, action, reward, next_state, done in mini_batch:
-    #         state = torch.FloatTensor(state).to(self.device)
-    #         next_state = torch.FloatTensor(next_state).to(self.device)
-    #         target = reward
-    #
-    #         if not done:
-    #             target += self.gamma * torch.max(self.model(next_state)).item()
-    #
-    #         q_values = self.model(state)
-    #         target_q = q_values.clone()
-    #         target_q[0][action] = target
-    #
-    #         self.optimizer.zero_grad()
-    #         loss = self.loss_fn(q_values, target_q.detach())
-    #         loss.backward()
-    #         self.optimizer.step()
-    #
-    #     if self.epsilon > self.epsilon_min:
-    #         self.epsilon *= self.epsilon_decay
-    #
-    # def save_model(self, path):
-    #     """
-    #     Save the model to a file.
-    #     """
-    #     torch.save(self.model, path)

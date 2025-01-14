@@ -1,99 +1,264 @@
 import sys
 import time
-
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from collections import deque
+import random
 import torch
 
-import src.q_agent.utils as us  # Assuming this module exists
+import src.q_agent.utils as us
 from agent import TradingAgent, QNetwork
-from src.configs.configs import TICKER_COL, CLOSE_COL, TRAIN_RL_PATH, RL_MODEL_PATH
+from src.configs.configs import TICKER_COL, CLOSE_COL, TRAIN_RL_PATH, RL_MODEL_PATH, BATCH_SIZE, REPLAY_MEMORY_SIZE, \
+    TRAINING_FREQUENCY
 from src.regime_detection.rf_classifier import load_trend_detector
 
-if __name__ == '__main__':
 
-    # filename, epochs = sys.argv[1], int(sys.argv[2])
-    # path = '/home/huy/Desktop/Thesis-code/trend-predict/data/' + filename  # Update path if needed
-    model = QNetwork(input_dim=18, action_dim=3)
-    trading_agent = TradingAgent(model=model, train=True)
+class ReplayMemory:
+    """
+    A cyclic buffer to store experience tuples for training a reinforcement learning agent.
+    """
+    def __init__(self, capacity=REPLAY_MEMORY_SIZE):
+        self.memory = deque(maxlen=capacity)
 
-    data = us.get_stock(TRAIN_RL_PATH)
-    length = len(data) - 1
-    batch_size = 32
-    rf_clf = load_trend_detector()
-    epochs = 10
+    def push(self, state, action, reward, next_state, done):
+        """
+        Adds a new experience to the memory.
+        """
+        self.memory.append((state, action, reward, next_state, done))
 
-    for e in range(epochs + 1):
-        wealth = 5000.0
-        portfolio, tickers = us.initialize_portfolio(data, wealth)
-        state = us.get_current_state(data, wealth, portfolio, 0)
-        print(f'Initial state: we have {wealth} in VND and our port is {portfolio}')
+    def sample(self, batch_size=BATCH_SIZE):
+        """
+        Randomly samples a batch of experiences from the memory.
 
-        total_profit = 0
-        trading_agent.inventory = []
-        total_val = [wealth]
+        Args:
+            batch_size: The size of the batch to sample.
 
-        for t in range(length):
-            # if t % 100 == 0:
-            #     print('------------------------------------------------------')
-            #     print(f'At time step {t} in epoch {e}:\n', reward)
-            #     # print(f'Current wealth {wealth + portfolio[tickers] * close}')
-            #     print('------------------------------------------------------')
-            #     print('\n')
-            #     time.sleep(0.9)
+        Returns:
+            A list of tuples, where each tuple represents an experience (state, action, reward, next_state, done).
+        """
+        return random.sample(self.memory, batch_size)
 
-            action = trading_agent.make_action(state)
-            reward = 0
-            temp = data.iloc[t]
-            ticker = tickers[0]
-            if action == 1:
-                if portfolio['cash'][t] >= data.iloc[t][CLOSE_COL]:
-                    trading_agent.inventory.append(temp)
-                    num_shares = int(portfolio['cash'][t] / temp[CLOSE_COL])
-                    portfolio['cash'].append(portfolio['cash'][t] - num_shares * temp[CLOSE_COL])
-                    portfolio[ticker].append(portfolio.get(ticker)[t] + num_shares)
-                    # print(f'All-in {temp[TICKER_COL]} at {temp[CLOSE_COL]}:\n')
-                    time.sleep(0.9)
-                else:
-                    # print('wrong buy move')
-                    reward -= portfolio['cash'][t] * 0.5
-                    portfolio['cash'].append(portfolio['cash'][t])
-                    portfolio[ticker].append(portfolio[ticker][t])
-            elif action == 2:
-                if len(trading_agent.inventory) > 0:
-                    data_past = trading_agent.inventory.pop(0)
-                    reward = temp[CLOSE_COL] - data_past[CLOSE_COL]
-                    profit = reward * portfolio[ticker][t]
-                    current_cash = portfolio['cash'][t] + temp[CLOSE_COL] * portfolio[ticker][t]
-                    portfolio['cash'].append(current_cash)
-                    portfolio[ticker].append(0)
+    def __len__(self):
+        """
+        Returns the current size of the memory.
+        """
+        return len(self.memory)
 
-                    # print(f'All-out {temp[TICKER_COL]} at {temp[CLOSE_COL]}:\n')
-                    time.sleep(0.9)
-                else:
-                    # print('wrong sell move')
-                    reward -= 0.5 * temp[CLOSE_COL] * portfolio[ticker][t]
-                    portfolio['cash'].append(portfolio['cash'][t])
-                    portfolio[ticker].append(portfolio[ticker][t])
+
+class EnvironmentSingleStock:
+    """
+    Represents the trading environment, managing the portfolio and generating states.
+    """
+
+    def __init__(self, data, feature_list, rf_clf, initial_wealth=5000.0):
+        self.data = data
+        self.feature_list = feature_list
+        self.rf_clf = rf_clf  # Assuming this is a trained classifier needed for state representation
+        self.initial_wealth = initial_wealth
+        self.portfolio = None
+        self.tickers = None
+        self.current_step = 0
+        self.length = len(data)
+
+    def reset(self):
+        """
+        Resets the environment to the initial state.
+        """
+        self.portfolio, self.tickers = us.initialize_portfolio(self.data, self.initial_wealth)
+        self.current_step = 0
+        state = self.get_state()
+        return state
+
+    def get_state(self):
+        """
+        Generates the current state based on market data, portfolio, and potentially other factors.
+        """
+        ticker = self.tickers[0]
+        data_state = self.data[self.feature_list].iloc[[self.current_step]]
+        state = us.get_current_state_single_stock(data_state, ticker, self.portfolio, self.rf_clf, t=self.current_step)
+        return state
+
+    def step(self, action):
+        """
+        Takes a step in the environment based on the given action.
+
+        Args:
+            action: The action to take (0: hold, 1: buy, 2: sell).
+
+        Returns:
+            A tuple containing the next state, reward, done flag, and additional information (optional).
+        """
+        ticker = self.tickers[0]
+        current_price = self.data[CLOSE_COL].iloc[self.current_step]
+        reward = 0
+        info = {}  # Can be used to store additional information about the step
+
+        if action == 1:  # Buy
+            if self.portfolio['cash'][self.current_step] >= current_price:
+                num_shares = int(self.portfolio['cash'][self.current_step] / current_price)
+                self.portfolio['cash'].append(self.portfolio['cash'][self.current_step] - num_shares * current_price)
+                self.portfolio[ticker].append(self.portfolio[ticker][self.current_step] + num_shares)
+                info['buy_price'] = num_shares * current_price  # Store buy price for later profit calculation
+                reward += 0.1  # Reward for successful buy
             else:
-                portfolio['cash'].append(portfolio['cash'][t])
-                portfolio[ticker].append(portfolio[ticker][t])
+                reward -= 0.005  # Penalty for insufficient funds
+                self.portfolio['cash'].append(self.portfolio['cash'][self.current_step])
+                self.portfolio[ticker].append(self.portfolio[ticker][self.current_step])
+                info['action_successful'] = False
 
-            next_step = t + 1
-            data_state = data[[i for i in data.columns if i != TICKER_COL]].iloc[[t + 1]]
-            next_state = us.get_current_state_single_stock(data_state, ticker, portfolio, rf_clf, t=t + 1)
+        elif action == 2:  # Sell
+            if self.portfolio[ticker][self.current_step] > 0:
+                profit = current_price * self.portfolio[ticker][self.current_step] - info.get('buy_price', 0)
+                info['profit'] = profit
+                reward += profit * 0.1
+                reward -= 0.001 * profit # Transaction Fee
+                self.portfolio['cash'].append(self.portfolio['cash'][self.current_step] + current_price * self.portfolio[ticker][self.current_step])
+                self.portfolio[ticker].append(0)
+                info['buy_price'] = 0
+            else:
+                reward -= 0.005 # Penalty for incorrect sell
+                self.portfolio['cash'].append(self.portfolio['cash'][self.current_step])
+                self.portfolio[ticker].append(self.portfolio[ticker][self.current_step])
+                info['action_successful'] = False
 
-            done = t == (length - 1)
-            trading_agent.memory.append((state, action, reward, next_state, done))
-            state = next_state
+        else:  # Hold
+            reward -= 0.001 * self.portfolio['cash'][self.current_step]
+            self.portfolio['cash'].append(self.portfolio['cash'][self.current_step])
+            self.portfolio[ticker].append(self.portfolio[ticker][self.current_step])
 
-            if done:
-                final_wealth = portfolio[tickers] * data.iloc[t].CLOSE + wealth
-                print(f'Final wealth: {final_wealth}')
-                print('reward: ', reward)
+        # Scale Reward
+        reward /= 1000
 
-            if len(trading_agent.memory) > batch_size:
-                print('Learning..., current reward: ', reward)
-                trading_agent.learn(batch_size)
-        if e % 2 == 0:
-            torch.save(trading_agent.model.state_dict(), f"{RL_MODEL_PATH}")  # Save PyTorch model
+        self.current_step += 1
+        done = self.current_step == self.length
 
-    print(trading_agent.history)  # Print the loss history
+        if done:
+            final_wealth = self.portfolio['cash'][-1] + self.portfolio[ticker][-1] * current_price
+            final_reward = final_wealth - self.initial_wealth
+            reward += final_reward * 0.05
+            info['final_wealth'] = final_wealth
+        else:
+            next_state = self.get_state()
+
+        return next_state if not done else None, reward, done, info
+
+
+class Trainer:
+    """
+    Handles the training loop for the reinforcement learning agent.
+    """
+    def __init__(self, agent, environment, replay_memory, optimizer, model_path):
+        """
+        Initializes the trainer.
+
+        Args:
+            agent: The trading agent.
+            environment: The trading environment.
+            replay_memory: The replay memory.
+            optimizer: The optimizer for training the agent's model.
+        """
+        self.agent = agent
+        self.environment = environment
+        self.replay_memory = replay_memory
+        self.optimizer = optimizer
+        self.model_path = model_path
+        self.rewards_per_episode = []
+        self.loss_history = []
+        self.action_counts = {'hold': [], 'buy': [], 'sell': [], 'failed_buy': [], 'failed_sell': []}
+        self.profit_history = []
+
+    def train(self, num_episodes=200):
+        """
+        Trains the agent for a specified number of episodes.
+
+        Args:
+            num_episodes: The number of episodes to train for.
+        """
+        for e in range(num_episodes):
+            state = self.environment.reset()
+            done = False
+            total_reward = 0
+            episode_loss = []
+            action_counts = {'hold': 0, 'buy': 0, 'sell': 0, 'failed_buy': 0, 'failed_sell': 0}
+
+            while not done:
+                action = self.agent.make_action(state)
+                next_state, reward, done, info = self.environment.step(action)
+                self.replay_memory.push(state, action, reward, next_state, done)
+                state = next_state
+                total_reward += reward
+
+                if action == 0:
+                    action_counts['hold'] += 1
+                elif action == 1:
+                    if 'action_successful' in info and not info['action_successful']:
+                        action_counts['failed_buy'] += 1
+                    else:
+                        action_counts['buy'] += 1
+                elif action == 2:
+                    if 'action_successful' in info and not info['action_successful']:
+                        action_counts['failed_sell'] += 1
+                    else:
+                        action_counts['sell'] += 1
+
+                if self.environment.current_step % TRAINING_FREQUENCY == 0 and len(self.replay_memory) > BATCH_SIZE:
+                    loss = self.train_step()
+                    episode_loss.append(loss)
+
+                self.agent.update_epsilon()
+
+            self.rewards_per_episode.append(total_reward)
+            if episode_loss:
+                self.loss_history.append(np.mean(episode_loss))
+            else:
+                self.loss_history.append(0)  # Handle cases where no training steps occurred in an episode
+
+            for action_type, count in action_counts.items():
+                self.action_counts[action_type].append(count)
+
+            if 'final_wealth' in info:
+                profit = info.get('final_wealth', 0) - self.environment.initial_wealth
+            else:
+                profit = 0
+            self.profit_history.append(profit)
+            print(f"Episode {e}: Total Reward: {total_reward:.2f}, Avg Loss: {self.loss_history[-1]:.4f}, Profit: {profit:.2f}")
+            print(f"  Action Counts - Hold: {action_counts['hold']}, Buy: {action_counts['buy']}, Sell: {action_counts['sell']}, Failed Buy: {action_counts['failed_buy']}, Failed Sell: {action_counts['failed_sell']}")
+            if e % 2 == 0:
+                torch.save(self.agent.model.state_dict(), self.model_path)
+
+    def train_step(self):
+        """
+        Performs a single training step using a batch from the replay memory.
+
+        Returns:
+            The loss value.
+        """
+        batch = self.replay_memory.sample(BATCH_SIZE)
+        states, actions, rewards, next_states, dones = zip(*batch)
+
+        states = torch.stack([torch.tensor(s, dtype=torch.float32) for s in states])
+        actions = torch.tensor(actions, dtype=torch.long).unsqueeze(1)
+        rewards = torch.tensor(rewards, dtype=torch.float32)
+        dones = torch.tensor(dones, dtype=torch.bool)
+
+        non_final_mask = torch.tensor([s is not None for s in next_states], dtype=torch.bool)
+        non_final_next_states = torch.stack(
+            [torch.tensor(s, dtype=torch.float32) for s in next_states if s is not None]
+        )
+
+        state_action_values = self.agent.model(states).squeeze(1).gather(1, actions)
+        next_state_values = torch.zeros(BATCH_SIZE, dtype=torch.float32)
+        if non_final_next_states.size(0) > 0:
+            next_state_values[non_final_mask] = self.agent.model(non_final_next_states).squeeze(1).max(1)[0].detach()
+
+        target_q_values = rewards + (GAMMA * next_state_values * (~dones).float())
+        loss = torch.nn.functional.smooth_l1_loss(state_action_values, target_q_values.unsqueeze(1))
+
+        torch.nn.utils.clip_grad_norm_(self.agent.model.parameters(), max_norm=20)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return loss.item()

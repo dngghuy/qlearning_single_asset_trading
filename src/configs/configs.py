@@ -19,10 +19,12 @@ RL_DATA_RATIO = 0.7
 WINDOW_LENGTH = 10
 DATE_COLUMN = 'Date'
 INITIAL_WEALTH = 5000
+REPLAY_MEMORY_SIZE = 100000
+TRAINING_FREQUENCY = 100
 
 # Training Parameters
-EPOCHS = 10                  # Number of epochs for model training
-BATCH_SIZE = 32              # Batch size for RL agent training
+EPOCHS = 50
+BATCH_SIZE = 512
 
 # Random Forest Parameters
 RATIO = 0.8
