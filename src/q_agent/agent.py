@@ -1,16 +1,15 @@
+from collections import deque
+
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import random
-import numpy as np
-from collections import deque
 
 
 class QNetwork(nn.Module):
     def __init__(self, input_dim, action_dim):
         """
         Flexible Q-network that allows varying hidden layer structures.
-
+Ø
         Args:
             input_dim (int): Dimension of input features.
             action_dim (int): Number of possible actions.
@@ -19,15 +18,15 @@ class QNetwork(nn.Module):
         super(QNetwork, self).__init__()
 
         self.model = nn.Sequential(
-            nn.Linear(input_dim, 64),
+            nn.Linear(input_dim, 32),
             nn.ReLU(),
-            nn.Linear(64, 128),
+
+            nn.Linear(32, 64),
             nn.ReLU(),
-            nn.Linear(128, 64),
+
+            nn.Linear(64, 32),
             nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
-            nn.Linear(64, action_dim)
+            nn.Linear(32, action_dim)
         )
 
     def forward(self, x):
@@ -39,13 +38,12 @@ class TradingAgent:
         self.action_size = 3
         self.memory = deque(maxlen=1000)
         self.inventory = []
-        # self.model_name = model_name
         self.train = train
 
-        self.gamma = 0.8
+        self.gamma = 0.95
         self.epsilon = 0.4
-        self.epsilon_min = 0.005
-        self.epsilon_decay = 0.2
+        self.epsilon_min = 0.01
+        self.epsilon_decay = 0.99
 
         self.model = model
         self.history = []
@@ -56,9 +54,9 @@ class TradingAgent:
         Chooses an action based on the current state using an epsilon-greedy strategy.
         """
         if self.train and np.random.binomial(1, self.epsilon):
-            return np.random.randint(0, self.action_size)  # Explore
+            return np.random.randint(0, self.action_size)
 
-        state = torch.FloatTensor(state)  # Convert state to PyTorch tensor
+        state = torch.FloatTensor(state)
         options = self.model(state)
         action = torch.argmax(options).item()
 
@@ -66,36 +64,5 @@ class TradingAgent:
         return action
 
     def update_epsilon(self):
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-
-    def learn(self, batch_size):
-        """
-        Updates the model using experience replay and a PyTorch training loop.
-        """
-        mini_batch = list(self.memory)[-batch_size:]
-        criterion = torch.nn.MSELoss()  # Example loss function
-        optimizer = optim.Adam(self.model.parameters(), lr=0.001)
-
-        for state, action, reward, next_state, done in mini_batch:
-            state = torch.FloatTensor(state)
-            next_state = torch.FloatTensor(next_state)
-            target = torch.FloatTensor([reward])
-
-            if not done:
-                target = (reward + self.gamma * torch.max(self.model(next_state))).reshape(-1)
-
-            # Forward pass
-            output = self.model(state)
-            output_action = output[0][action].reshape(-1)
-            loss = criterion(output_action, target)
-
-            # Backward pass and optimization
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            self.history.append(loss.item())
-
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay

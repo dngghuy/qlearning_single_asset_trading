@@ -1,7 +1,7 @@
-
 import pandas as pd
 import numpy as np
-
+import matplotlib.pyplot as plt
+from collections import OrderedDict
 from src.configs.configs import CLOSE_COL, TICKER_COL, VOLUME_COL
 
 
@@ -63,12 +63,74 @@ def initialize_portfolio(data, wealth):
     return port, all_stocks
 
 
-def get_current_state_single_stock(data, ticker, portfolio, clf, t):
+def get_current_state_single_stock(data, clf):
     """
     data should be cleaned
     """
     # getting other cols
 
-    pred_t = clf.predict(data)[0]
+    pred_t = clf.predict_proba(data)[0][0]
 
     return np.hstack([data.values.reshape(-1), np.array([pred_t])]).reshape(1, -1)
+
+
+def remove_prefix(state_dict, prefix):
+    """
+    Removes a prefix from the keys of a state dictionary.
+
+    Args:
+        state_dict (OrderedDict): The state dictionary to modify.
+        prefix (str): The prefix to remove.
+
+    Returns:
+        OrderedDict: The modified state dictionary.
+    """
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        name = k[len(prefix) + 1:] if k.startswith(prefix + '.') else k  # remove the prefix
+        new_state_dict[name] = v
+    return new_state_dict
+
+
+def plot_metrics(trainer, filename, window_size=50):
+    """
+    Plots various metrics tracked during training on a single subplot.
+
+    Args:
+        trainer: The Trainer object containing the training data.
+        window_size: The window size for the moving average calculation.
+    """
+
+    # Moving average function (keep this inside plot_metrics for clarity)
+    def moving_average(data, window_size):
+        return np.convolve(data, np.ones(window_size) / window_size, mode='valid')
+
+    # --- Create the figure and subplot ---
+    plt.figure(figsize=(12, 6))
+    ax = plt.subplot(111)
+
+    # --- Plot rewards per episode ---
+    ax.plot(trainer.rewards_per_episode, label='Rewards per Episode', color='blue')
+    ax.plot(moving_average(trainer.rewards_per_episode, window_size), label=f'Moving Average Reward (Window={window_size})', color='skyblue')
+
+    # --- Plot loss history ---
+    ax.plot(trainer.loss_history, label='Average Loss per Episode', color='orange')
+
+    # --- Plot action counts ---
+    for action_type, counts in trainer.action_counts.items():
+        ax.plot(counts, label=f'{action_type.capitalize()} Actions', linestyle='--')
+
+    # --- Plot profit history ---
+    ax.plot(trainer.profit_history, label='Profit per Episode', color='green')
+    ax.plot(moving_average(trainer.profit_history, window_size), label=f'Moving Average Profit (Window={window_size})', color='limegreen')
+
+    # --- Set labels and title ---
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Value')
+    ax.set_title('Training Metrics')
+
+    # --- Add legend ---
+    ax.legend()
+
+    plt.savefig(filename)
+

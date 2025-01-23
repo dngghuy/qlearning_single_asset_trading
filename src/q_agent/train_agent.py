@@ -1,17 +1,20 @@
-import sys
-import time
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 from collections import deque
 import random
 import torch
 
 import src.q_agent.utils as us
-from agent import TradingAgent, QNetwork
-from src.configs.configs import TICKER_COL, CLOSE_COL, TRAIN_RL_PATH, RL_MODEL_PATH, BATCH_SIZE, REPLAY_MEMORY_SIZE, \
+from src.configs.configs import CLOSE_COL, BATCH_SIZE, REPLAY_MEMORY_SIZE, \
     TRAINING_FREQUENCY
-from src.regime_detection.rf_classifier import load_trend_detector
+import random
+from collections import deque
+
+import numpy as np
+import torch
+
+import src.q_agent.utils as us
+from src.configs.configs import CLOSE_COL, BATCH_SIZE, REPLAY_MEMORY_SIZE, \
+    TRAINING_FREQUENCY
 
 
 class ReplayMemory:
@@ -60,6 +63,7 @@ class EnvironmentSingleStock:
         self.tickers = None
         self.current_step = 0
         self.length = len(data)
+        self.current_buy = 0
 
     def reset(self):
         """
@@ -68,6 +72,7 @@ class EnvironmentSingleStock:
         self.portfolio, self.tickers = us.initialize_portfolio(self.data, self.initial_wealth)
         self.current_step = 0
         state = self.get_state()
+        self.current_buy = 0
         return state
 
     def get_state(self):
@@ -76,7 +81,7 @@ class EnvironmentSingleStock:
         """
         ticker = self.tickers[0]
         data_state = self.data[self.feature_list].iloc[[self.current_step]]
-        state = us.get_current_state_single_stock(data_state, ticker, self.portfolio, self.rf_clf, t=self.current_step)
+        state = us.get_current_state_single_stock(data_state, self.rf_clf)
         return state
 
     def step(self, action):
@@ -100,43 +105,50 @@ class EnvironmentSingleStock:
                 self.portfolio['cash'].append(self.portfolio['cash'][self.current_step] - num_shares * current_price)
                 self.portfolio[ticker].append(self.portfolio[ticker][self.current_step] + num_shares)
                 info['buy_price'] = num_shares * current_price  # Store buy price for later profit calculation
-                reward += 0.1  # Reward for successful buy
+                reward -= 0.001 * num_shares * current_price / self.initial_wealth
+                self.current_buy = self.current_step
             else:
-                reward -= 0.005  # Penalty for insufficient funds
+                reward -= 0.0005  # Penalty for incorrect sell
+                reward -= 0.001 * self.portfolio['cash'][self.current_step] / self.initial_wealth
                 self.portfolio['cash'].append(self.portfolio['cash'][self.current_step])
                 self.portfolio[ticker].append(self.portfolio[ticker][self.current_step])
                 info['action_successful'] = False
 
         elif action == 2:  # Sell
-            if self.portfolio[ticker][self.current_step] > 0:
-                profit = current_price * self.portfolio[ticker][self.current_step] - info.get('buy_price', 0)
+            if self.portfolio[ticker][self.current_step] > 0 and self.current_step >= self.current_buy + 20:
+                profit = current_price * (self.portfolio[ticker][self.current_step] - info.get('buy_price', 0))
                 info['profit'] = profit
-                reward += profit * 0.1
-                reward -= 0.001 * profit # Transaction Fee
-                self.portfolio['cash'].append(self.portfolio['cash'][self.current_step] + current_price * self.portfolio[ticker][self.current_step])
+                reward += profit / ((current_price / self.data[CLOSE_COL].iloc[0]) * self.initial_wealth) - 1
+                reward -= 0.001 * np.abs(profit) / self.initial_wealth  # Transaction Fee
+                self.portfolio['cash'].append(
+                    self.portfolio['cash'][self.current_step] + current_price * self.portfolio[ticker][
+                        self.current_step])
                 self.portfolio[ticker].append(0)
                 info['buy_price'] = 0
+                self.current_buy = 0
             else:
-                reward -= 0.005 # Penalty for incorrect sell
+                reward -= 0.0005  # Penalty for incorrect sell
+                reward -= 0.001 * self.portfolio['cash'][self.current_step] / self.initial_wealth
                 self.portfolio['cash'].append(self.portfolio['cash'][self.current_step])
                 self.portfolio[ticker].append(self.portfolio[ticker][self.current_step])
                 info['action_successful'] = False
 
         else:  # Hold
-            reward -= 0.001 * self.portfolio['cash'][self.current_step]
+            reward -= 0.001 * self.portfolio['cash'][self.current_step] / self.initial_wealth
             self.portfolio['cash'].append(self.portfolio['cash'][self.current_step])
             self.portfolio[ticker].append(self.portfolio[ticker][self.current_step])
 
-        # Scale Reward
-        reward /= 1000
 
         self.current_step += 1
         done = self.current_step == self.length
 
         if done:
             final_wealth = self.portfolio['cash'][-1] + self.portfolio[ticker][-1] * current_price
-            final_reward = final_wealth - self.initial_wealth
-            reward += final_reward * 0.05
+            additional_reward = final_wealth / ((self.data[CLOSE_COL].iloc[self.current_step - 1] /
+                                                 self.data[CLOSE_COL].iloc[0]) * self.initial_wealth) - 1
+
+            final_reward = final_wealth / self.initial_wealth - 1
+            reward += (additional_reward)
             info['final_wealth'] = final_wealth
         else:
             next_state = self.get_state()
@@ -148,6 +160,7 @@ class Trainer:
     """
     Handles the training loop for the reinforcement learning agent.
     """
+
     def __init__(self, agent, environment, replay_memory, optimizer, model_path):
         """
         Initializes the trainer.
@@ -166,6 +179,7 @@ class Trainer:
         self.rewards_per_episode = []
         self.loss_history = []
         self.action_counts = {'hold': [], 'buy': [], 'sell': [], 'failed_buy': [], 'failed_sell': []}
+        self.logged_actions = []
         self.profit_history = []
 
     def train(self, num_episodes=200):
@@ -181,8 +195,9 @@ class Trainer:
             total_reward = 0
             episode_loss = []
             action_counts = {'hold': 0, 'buy': 0, 'sell': 0, 'failed_buy': 0, 'failed_sell': 0}
-
+            v = 0
             while not done:
+
                 action = self.agent.make_action(state)
                 next_state, reward, done, info = self.environment.step(action)
                 self.replay_memory.push(state, action, reward, next_state, done)
@@ -212,7 +227,7 @@ class Trainer:
             if episode_loss:
                 self.loss_history.append(np.mean(episode_loss))
             else:
-                self.loss_history.append(0)  # Handle cases where no training steps occurred in an episode
+                self.loss_history.append(0)
 
             for action_type, count in action_counts.items():
                 self.action_counts[action_type].append(count)
@@ -222,8 +237,10 @@ class Trainer:
             else:
                 profit = 0
             self.profit_history.append(profit)
-            print(f"Episode {e}: Total Reward: {total_reward:.2f}, Avg Loss: {self.loss_history[-1]:.4f}, Profit: {profit:.2f}")
-            print(f"  Action Counts - Hold: {action_counts['hold']}, Buy: {action_counts['buy']}, Sell: {action_counts['sell']}, Failed Buy: {action_counts['failed_buy']}, Failed Sell: {action_counts['failed_sell']}")
+            print(
+                f"Episode {e}: Total Reward: {total_reward:.2f}, Avg Loss: {self.loss_history[-1]:.4f}, Profit: {profit:.2f}")
+            print(
+                f"  Action Counts - Hold: {action_counts['hold']}, Buy: {action_counts['buy']}, Sell: {action_counts['sell']}, Failed Buy: {action_counts['failed_buy']}, Failed Sell: {action_counts['failed_sell']}")
             if e % 2 == 0:
                 torch.save(self.agent.model.state_dict(), self.model_path)
 
@@ -238,6 +255,7 @@ class Trainer:
         states, actions, rewards, next_states, dones = zip(*batch)
 
         states = torch.stack([torch.tensor(s, dtype=torch.float32) for s in states])
+        states = states.squeeze(1)
         actions = torch.tensor(actions, dtype=torch.long).unsqueeze(1)
         rewards = torch.tensor(rewards, dtype=torch.float32)
         dones = torch.tensor(dones, dtype=torch.bool)
@@ -252,10 +270,9 @@ class Trainer:
         if non_final_next_states.size(0) > 0:
             next_state_values[non_final_mask] = self.agent.model(non_final_next_states).squeeze(1).max(1)[0].detach()
 
-        target_q_values = rewards + (GAMMA * next_state_values * (~dones).float())
+        target_q_values = rewards + (self.agent.gamma * next_state_values * (~dones).float())
         loss = torch.nn.functional.smooth_l1_loss(state_action_values, target_q_values.unsqueeze(1))
 
-        torch.nn.utils.clip_grad_norm_(self.agent.model.parameters(), max_norm=20)
 
         self.optimizer.zero_grad()
         loss.backward()

@@ -148,10 +148,13 @@ class ExpSmooth:
 class DataFeatureEngineer:
     def __init__(self, transformation_list):
         self.transformation_list = transformation_list
+        self.feature_list = []
 
     def process(self, dataset):
+        old_columns = dataset.columns
         for transformation in self.transformation_list:
             dataset = transformation(dataset)
+        self.feature_list = [i for i in dataset.columns if i not in old_columns]
 
         return dataset
 
@@ -177,7 +180,7 @@ def make_onehot(label):
     return one_hot
 
 
-def preprocess(dataset):
+def preprocess(dataset, transformation_list):
     """
 
     Args:
@@ -188,17 +191,6 @@ def preprocess(dataset):
     """
 
     dataset.columns = [dat.lower() for dat in dataset.columns]
-    feature_list = [
-        'macd',
-        'macd_signal',
-        'macd_hist',
-        'rsi',
-        'mom',
-        'roc_10',
-        'willr',
-        'mfi',
-        'delta_volume'
-    ]
     # Split to train and test sets
     index = int(len(dataset) * RATIO)
     train_dataset = dataset.iloc[0:index, :]
@@ -208,19 +200,7 @@ def preprocess(dataset):
     train_dataset, train_label = make_label(train_dataset, window_length=WINDOW_LENGTH)
     test_dataset, test_label = make_label(test_dataset, window_length=WINDOW_LENGTH)
 
-    exp_smooth = ExpSmooth(alpha=0.2)
-
-    transformation_list = [
-        WrapSMA(timeperiod=10),
-        WrapSMA(timeperiod=30),
-        WrapMACD(fastperiod=12, slowperiod=26, signalperiod=9),
-        WrapRSI(timeperiod=10),
-        WrapMOM(timeperiod=12),
-        WrapROC(timeperiod=10),
-        WrapWILLR(timeperiod=14),
-        WrapMFI(timeperiod=14),
-        WrapDELTA(timeperiod=10),
-    ]
+    # exp_smooth = ExpSmooth(alpha=0.2)
 
     feature_engineer = DataFeatureEngineer(transformation_list)
 
@@ -231,10 +211,10 @@ def preprocess(dataset):
     # Create new feature
     train_dataset = feature_engineer.process(train_dataset)
     train_dataset = train_dataset.dropna().reset_index(drop=True)
-    train_dataset = train_dataset[feature_list]
+    train_dataset = train_dataset[feature_engineer.feature_list]
     test_dataset = feature_engineer.process(test_dataset)
     test_dataset = test_dataset.dropna().reset_index(drop=True)
-    test_dataset = test_dataset[feature_list]
+    test_dataset = test_dataset[feature_engineer.feature_list]
 
     # Make features matrix and label matrix to be equal
     train_len_diff = len(train_label) - len(train_dataset)
@@ -243,10 +223,6 @@ def preprocess(dataset):
     test_len_diff = len(test_label) - len(test_dataset)
     test_label = test_label[test_len_diff:]
 
-    return train_dataset, train_label, test_dataset, test_label
+    return train_dataset, train_label, test_dataset, test_label, feature_engineer
 
-
-def load_and_preprocess(filename):
-    dataset = read_data(filename, has_date_col=DATE_COLUMN)
-    return preprocess(dataset)
 

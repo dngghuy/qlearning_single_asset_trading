@@ -9,8 +9,10 @@ RESULT_PATH = os.path.join(ROOT_FILE, 'results')
 
 # Paths
 TRAIN_RF_PATH = os.path.join(DATA_PATH, 'GOOGL_RF.csv')
-TRAIN_RL_PATH = os.path.join(DATA_PATH, 'VNM.csv')
+TRAIN_RL_PATH = os.path.join(DATA_PATH, 'VNM_train.csv')
+TEST_RL_PATH = os.path.join(DATA_PATH, 'VNM_test.csv')
 RF_MODEL_PATH = os.path.join(MODEL_PATH, 'trendRF.pkl')
+FEATURE_ENGINEER_PATH = os.path.join(MODEL_PATH, 'feature_engineer.pkl')
 RL_MODEL_PATH = os.path.join(MODEL_PATH, 'trendRL.pkl')
 
 # General Parameters
@@ -20,6 +22,7 @@ WINDOW_LENGTH = 10
 DATE_COLUMN = 'Date'
 INITIAL_WEALTH = 5000
 REPLAY_MEMORY_SIZE = 100000
+LR = 1e-3
 TRAINING_FREQUENCY = 100
 
 # Training Parameters
@@ -52,5 +55,7 @@ WILLR_COL = 'willr'
 VOLUME_COL = 'volume'
 DELTA_VOLUME_COL = 'delta_volume'
 MFI_COL = 'mfi'
+DATE = 'date'
+TICKER = 'ticker'
 # Ensure directories exist
 # os.makedirs(BASE_PATH, exist_ok=True)
